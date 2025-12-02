@@ -1,3 +1,4 @@
+
 import express from "express";
 import bodyParser from "body-parser";
 import session from "express-session";
@@ -63,6 +64,7 @@ app.post("/login", async (req, res) => {
     }
   }
 });
+
 
 // ------------------------ ASSISTANT INTERFACE -------------------------
 
@@ -286,6 +288,99 @@ app.get("/assistant/mngevent/edit-event/:idEvent", async (req, res) => {
   }
 });
 
+// Route untuk halaman detail event DONE
+app.get("/assistant/mngevent/detail/:id", async (req, res) => {
+  const statusMessages = req.flash("status");
+  const status = statusMessages.length > 0 ? statusMessages[0] : null;
+  const perPage = 7;
+  const page = parseInt(req.query.page) || 1;
+
+  try {
+    const pool = connect();
+
+    const sqlVendors = `
+      SELECT Vendor.id_vendor, Vendor.nama_vendor, KategoriVendor.nama_kategori, EventVendor.harga_dealing, Vendor.harga_min, Vendor.harga_max 
+      FROM (SELECT * FROM Event WHERE id_event = ?) AS e 
+      INNER JOIN EventVendor ON EventVendor.id_event = e.id_event 
+      INNER JOIN Vendor ON EventVendor.id_vendor = Vendor.id_vendor 
+      INNER JOIN KategoriVendor ON KategoriVendor.id_kategori = Vendor.id_kategori`;
+
+    const [rows] = await pool.execute(sqlVendors, [req.params.id]);
+
+    const totalItems = rows.length;
+    const start = (page - 1) * perPage;
+    const totalPages = Math.ceil(totalItems / perPage);
+
+    const paginated = rows.slice(start, start + perPage);
+
+    const sqlTotal = `SELECT SUM(EventVendor.harga_dealing) AS 'TotalFix' FROM(SELECT * FROM Event WHERE id_event = ?) AS e INNER JOIN EventVendor ON EventVendor.id_event = e.id_event`;
+    const [totalFix] = await pool.execute(sqlTotal, [req.params.id]);
+
+    const sqlHeading = `
+      SELECT Klien.nama, JenisEvent.nama_jenis 
+      FROM (SELECT * FROM Event WHERE id_event = ?) AS e 
+      INNER JOIN MenyelenggarakanEvent ON e.id_event = MenyelenggarakanEvent.id_event 
+      INNER JOIN JenisEvent ON e.id_jenis = JenisEvent.id_jenis 
+      INNER JOIN Klien ON MenyelenggarakanEvent.id_klien = Klien.id_klien`;
+      
+    const [heading] = await pool.execute(sqlHeading, [req.params.id]);
+
+    res.render("detail-event.ejs", {
+      title: "Event - Vendor Detail",
+      heading: heading[0].nama + "'s " + heading[0].nama_jenis,
+      columns: ["Vendor", "Type", "Price", "Status"],
+      vendors: paginated,
+      active: 3,
+      status: status,
+      currentPage: page,
+      totalPages: totalPages,
+      totalFix: totalFix[0].TotalFix || 0,
+      idEvent: req.params.id,
+    });
+  } catch (err) {
+    console.log(err.message);
+  }
+});
+
+// Route untuk halaman detail event - add vendor
+app.get("/assistant/mngevent/detail/add-vendor/:idEvent", async (req, res) => {
+  try {
+    const pool = connect();
+    const [rows] = await pool.execute("SELECT id_vendor, nama_vendor FROM Vendor");
+
+    res.render("addEventVendor.ejs", {
+      title: "Add new Vendor",
+      active: 3,
+      vendors: rows,
+      idEvent: req.params.idEvent,
+    });
+  } catch (err) {
+    console.log(err.message);
+  }
+});
+
+// Route untuk halaman detail event - edit vendor DONE
+app.get("/assistant/mngevent/detail/edit-vendor/:idEvent/:idVendor", async (req, res) => {
+  try {
+    const pool = connect();
+    const [rows] = await pool.execute(
+        "SELECT harga_dealing FROM EventVendor WHERE id_event = ? AND id_vendor = ?", 
+        [req.params.idEvent, req.params.idVendor]
+    );
+
+    res.render("editEventVendor.ejs", {
+      idEvent: req.params.idEvent,
+      idVendor: req.params.idVendor,
+      title: "Edit Vendor",
+      active: 3,
+      isFix: rows[0].harga_dealing != null,
+      hargaDealing: rows[0].harga_dealing,
+    });
+  } catch (err) {
+    console.log(err.message);
+  }
+});
+
 // --------------------------- POST HANDLING -----------------------------
 
 // POST dari form add client DONE
@@ -436,7 +531,94 @@ app.post("/assistant/mngevent/delete-event/:id", async (req, res) => {
   }
 });
 
+// POST dari halaman detail event - add vendor DONE
+app.post("/assistant/mngevent/detail/add-vendor/:idEvent", async (req, res) => {
+  const idEvent = req.params.idEvent;
+  const idVendor = req.body.vendorId;
 
+  try {
+    const pool = connect();
+    const [result] = await pool.execute(
+        "INSERT INTO EventVendor(id_event, id_vendor) VALUES(?, ?)", 
+        [idEvent, idVendor]
+    );
+
+    if (result.affectedRows == 1) {
+      req.flash("status", "Vendor Successfully Added!");
+      res.redirect("/assistant/mngevent/detail/" + idEvent);
+    }
+  } catch (err) {
+    req.flash("status", "Vendor Cannot Be Added!");
+    res.redirect("/assistant/mngevent/detail/" + idEvent);
+    console.log(err.message);
+  }
+});
+
+// POST dari halaman detail event - edit vendor DONE
+app.post("/assistant/mngevent/detail/edit-vendor/:idEvent/:idVendor", async (req, res) => {
+  const idEvent = req.params.idEvent;
+  const idVendor = req.params.idVendor;
+  const { priceStatus, price } = req.body;
+
+  if (priceStatus == "Fix") {
+    try {
+      const pool = connect();
+      const [result] = await pool.execute(
+        "UPDATE EventVendor SET harga_dealing = ? WHERE id_event = ? AND id_vendor = ?",
+        [price, idEvent, idVendor]
+      );
+
+      if (result.affectedRows == 1) {
+        req.flash("status", "Vendor Dealing Price Successfully Updated!");
+        res.redirect("/assistant/mngevent/detail/" + idEvent);
+      }
+    } catch (err) {
+      req.flash("status", "Vendor Dealing Price Cannot Be Updated!");
+      res.redirect("/assistant/mngevent/detail/" + idEvent);
+      console.log(err.message);
+    }
+  } else {
+    try {
+      const pool = connect();
+      const [result] = await pool.execute(
+        "UPDATE EventVendor SET harga_dealing = null WHERE id_event = ? AND id_vendor = ?",
+        [idEvent, idVendor]
+      );
+
+      if (result.affectedRows == 1) {
+        req.flash("status", "Vendor Price Successfully Updated to Estimation!");
+        res.redirect("/assistant/mngevent/detail/" + idEvent);
+      }
+    } catch (err) {
+      req.flash("status", "Vendor Price Cannot Be Updated to Estimation!");
+      res.redirect("/assistant/mngevent/detail/" + idEvent);
+      console.log(err.message);
+    }
+  }
+});
+
+// POST dari halaman detail event - delete vendor DONE
+app.post("/assistant/mngevent/detail/delete-vendor/:idEvent/:idVendor", async (req, res) => {
+  const idEvent = req.params.idEvent;
+  const idVendor = req.params.idVendor;
+
+  try {
+    const pool = connect();
+    const [result] = await pool.execute(
+        "DELETE FROM EventVendor WHERE id_event = ? AND id_vendor = ?",
+        [idEvent, idVendor]
+    );
+
+    if (result.affectedRows == 1) {
+      req.flash("status", "Vendor Successfully Deleted From Event!");
+      res.redirect("/assistant/mngevent/detail/" + idEvent);
+    }
+  } catch (err) {
+    req.flash("status", "Vendor Cannot Be Deleted From Event!");
+    res.redirect("/assistant/mngevent/detail/" + idEvent);
+    console.log(err.message);
+  }
+});
 
 // --------------------------- OWNER INTERFACE ------------------------------
 
@@ -529,6 +711,7 @@ app.get("/owner/mngassistant/edit-assistant/:id", async (req, res) => {
 });
 
 // Route untuk ke Manage Vendor DONE
+
 app.get("/owner/mngvendor", async (req, res) => {
   const statusMessages = req.flash("status");
   const status = statusMessages.length > 0 ? statusMessages[0] : null;
@@ -671,6 +854,8 @@ app.get("/owner/mngvendor/mngtype", async (req, res) => {
     console.log(err.message);
   }
 });
+
+
 
 
 // --------------------------- OWNER POST HANDLING ----------------------
