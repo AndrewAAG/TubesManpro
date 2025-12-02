@@ -64,8 +64,6 @@ app.post("/login", async (req, res) => {
   }
 });
 
-// WP 2.4.1 END
-
 // ------------------------ ASSISTANT INTERFACE -------------------------
 
 // Route untuk halaman dashboard client DONE
